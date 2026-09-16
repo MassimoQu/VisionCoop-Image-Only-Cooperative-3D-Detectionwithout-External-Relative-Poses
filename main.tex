@@ -1,0 +1,41 @@
+\documentclass[letterpaper,10pt,conference]{ieeeconf}
+\overrideIEEEmargins
+\usepackage[T1]{fontenc}
+\usepackage{times,amsmath,amssymb,graphicx,booktabs,cite,url,balance}
+\usepackage[hidelinks]{hyperref}
+
+% ==============================================================================
+% Revision & Annotation Settings
+% Set \showeditstrue to display colored diffs and notes in the review PDF.
+% Set \showeditsfalse for a clean, publication-ready submission PDF.
+% ==============================================================================
+\newif\ifshowedits
+\showeditsfalse  % <--- TOGGLE HERE: true = Review/Diff Mode, false = Clean Submission Mode
+\input{sections/revision_macros.tex}
+
+% Project Notation
+\newcommand{\method}{VisionCoop}
+\newcommand{\R}{\mathbb{R}}
+
+\title{VisionCoop: Image-Only Cooperative 3D Detection\\without External Relative Poses}
+\author{Anonymous Authors}
+
+\begin{document}
+\maketitle
+
+% Modular Sections
+\input{sections/00_abstract.tex}
+\input{sections/01_introduction.tex}
+\input{sections/02_related_work.tex}
+\input{sections/03_method.tex}
+\input{sections/04_experiments.tex}
+\input{sections/05_discussion.tex}
+\input{sections/06_conclusion.tex}
+
+% Bibliography
+\def\BIBdecl{\scriptsize}
+\balance
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}

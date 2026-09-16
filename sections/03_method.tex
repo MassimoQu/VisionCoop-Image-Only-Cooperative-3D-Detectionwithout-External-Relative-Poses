@@ -1,0 +1,81 @@
+\section{Method}
+\subsection{Preliminaries: Visual Geometry Foundation Models}
+\label{sec:preliminaries}
+Recent 3D visual foundation models~\cite{dust3r,vggt,omega} demonstrate compelling capabilities in dense geometry reconstruction and unposed camera parameter regression directly from multi-view images. Given unposed surround images $\mathcal{I} = \{I_m \in \mathbb{R}^{H \times W \times 3}\}_{m=1}^M$, a visual geometry model processes patch tokens through alternating intra-image self-attention and cross-image attention layers, $\mathbf{Z}^{(\ell+1)} = \operatorname{CrossAttn}(\operatorname{SelfAttn}(\mathbf{Z}^{(\ell)}))$, establishing pairwise geometric correspondences across views. Specialized heads concurrently predict dense monocular depth maps $D_m$, confidence $C_m$, and estimated camera extrinsics $\hat{E}_m$. Inherent to optical projection, the reconstructed 3D structure is determined up to a canonical coordinate frame with an arbitrary global scale factor $s^* > 0$. We adopt VGGT-$\Omega$~\cite{omega} as our geometric foundation backbone to directly ground 3D object detection queries.
+
+\subsection{Problem Formulation}
+\label{sec:problem_formulation}
+Consider $V$ connected autonomous vehicles (CAVs) $\mathcal{V} = \{1, \dots, V\}$ with reference ego agent $e \in \mathcal{V}$ establishing frame $\mathcal{F}_e$. Each vehicle $v$ observes local traffic through $C$ rigidly mounted surround cameras ($c \in \{1, \dots, C\}$) capturing images $\mathcal{I}_v = \{I_{v,c}\}_{c=1}^C$.
+
+\textbf{Known Rig Calibration.} For each vehicle $v$, camera intrinsics $K_{v,c} \in \mathbb{R}^{3 \times 3}$ and intra-vehicle rig extrinsics $E_{v,c} = T_{c \leftarrow v} \in \mathrm{SE}(3)$ are known a priori via factory calibration, mapping body coordinates $\mathbf{x}_v \in \mathcal{F}_v$ to camera frames $\mathcal{F}_{v,c}$ via $\mathbf{x}_{v,c} = E_{v,c} \mathbf{x}_v$.
+
+\textbf{Pose-Free Collaboration.} Crucially, distinct from conventional V2X systems that rely on external GNSS/IMU positioning or LiDAR point clouds, \emph{no externally supplied inter-vehicle relative poses $T_{e \leftarrow v} \in \mathrm{SE}(3)$ are provided at inference}. Known camera intrinsics and fixed intra-vehicle rig extrinsics remain available. Relative cross-vehicle alignments $\hat{T}_{e \leftarrow v}$ must be inferred through visual evidence exchanged across the multi-agent image stream $\mathcal{I} = \bigcup_{v \in \mathcal{V}} \mathcal{I}_v$.
+
+\textbf{Task Objective.} In a self-consistent visual coordinate space, the goal is to predict oriented 3D vehicle bounding boxes in reference frame $\mathcal{F}_e$:
+\begin{equation}
+\mathcal{B}_e = \left\{ \mathbf{b}_k = \left(\mathbf{c}_k, \mathbf{d}_k, \theta_k, s_k\right) \right\}_{k=1}^K,
+\end{equation}
+where $\mathbf{c}_k \in \mathbb{R}^3$, $\mathbf{d}_k \in \mathbb{R}_+^3$, $\theta_k \in [-\pi, \pi)$, and $s_k \in [0, 1]$ denote center, dimensions, yaw, and objectness score. Local boxes in $\mathcal{F}_v$ are mapped into $\mathcal{F}_e$ via inferred $\hat{T}_{e \leftarrow v}$ and consolidated via oriented NMS. Following multi-view geometry conventions~\cite{dust3r,vggt}, detection is evaluated under scale alignment, isolating collaborative geometric reasoning from global scale ambiguity.
+
+\subsection{Shared Visual Geometry Backbone}
+VGGT-$\Omega$ uses a self-supervised DINO-family-initialized ViT-L/16 image encoder with 24 layers, followed by 24 aggregation stages. Each stage contains one within-image and one inter-image attention block. The inter-image operation alternates, according to the released configuration, between global processing and restricted exchange through special tokens. Each image contributes a camera token and 16 scene/register tokens in addition to image patches. We retain this backbone structure.
+
+The camera head reads the final special-token representation. The dense head reads patch features at zero-based stages $\{4,11,17,23\}$ and outputs depth and confidence. The Query detector reads intermediate image features from the same four stages and projects them to a 256-dimensional detection representation. The camera head does not take the depth head's output as its input. No text-alignment output is used in our detector.
+
+The backbone processes all selected vehicle images jointly. The detector subsequently organizes queries in vehicle-local coordinates, so local box initialization does not require the estimated cross-vehicle transformation. The local features can nevertheless contain information exchanged across vehicles by the shared backbone. This distinction separates where visual cooperation occurs from where box coordinates are represented.
+
+\subsection{Surface-Guided Query Initialization}
+The initializer first reads multi-view appearance over a spatial proposal representation, with two spatial-memory layers and 96 output queries per vehicle. Its configured ground grid spans $x,y\in[-51.2,51.2]$ with 2 m spacing in the calibrated working representation. This grid provides candidate locations rather than a dense final detection output.
+
+To associate queries with physical evidence, we sample depth and image features on an 8-pixel-stride image lattice. A sampled pixel $\tilde{\mathbf u}=(u,v,1)^\top$ is lifted into the local vehicle frame as
+\begin{equation}
+ \mathbf x=\operatorname{xyz}\!\left(E_{v,c}^{-1}
+ \begin{bmatrix}D_{v,c}(u,v)K_{v,c}^{-1}\tilde{\mathbf u}\\1\end{bmatrix}\right).
+\end{equation}
+Depth and calibration are expressed in consistent units. Concatenating the 256-dimensional appearance feature, three normalized coordinates, and confidence gives a 260-dimensional evidence vector. Inspired by deep Hough voting on 3D point sets~\cite{votenet}, a small network predicts foreground probability $p_i$, content $\mathbf h_i$, and a bounded center-vote offset. A surface vote is $\mathbf z_i=\mathbf x_i+\Delta\mathbf x_i$; thus an observed surface is not assumed to coincide with the object center.
+
+Foreground votes are accumulated on a 0.4 m ground grid. Smoothed density peaks seed groups, points are assigned to nearby centers within 1.5 m, and groups with fewer than three members are removed. At most 96 groups are retained. Group centers and content are probability-weighted means. A minimum-cost one-to-one assignment associates group centers with available query locations. For group $G_j$, the initialized appearance is
+\begin{equation}
+ \mathbf q_j^0=\frac{\sum_{i\in G_j}p_i\mathbf f_i}{\sum_{i\in G_j}p_i}
+ +W_h\overline{\mathbf h}_j.
+\end{equation}
+The group center initializes position, and a learned map from group content predicts dimensions and yaw. Unallocated query slots are masked from message exchange and suppressed at the output. The surface voting, feature aggregation, and query initialization heads are trained end-to-end with the downstream detector.
+
+\subsection{Depth-Guided Iterative Query Refinement}
+Six decoder layers refine the initialized boxes. At each layer, a box provides a sampling pattern containing its center, corners, and face centers, with 16 entries in the implemented pattern. These 3D locations are projected into four local cameras to read image features. The decoder retains its fixed-anchor image evidence as well as evidence from the current box. Depth residuals are attached to the sampled current-box features.
+
+For each projected location, the depth branch retrieves the nearest valid depth prediction along its camera ray to reconstruct the observed 3D surface point $\mathbf x_{j,k}^\ell$. The relative descriptor then normalizes this offset by the current box's orientation and half-dimensions:
+\begin{equation}
+ \mathbf r_{j,k}^\ell=
+ \frac{R_z(\theta_j^\ell)^\top(\mathbf x_{j,k}^\ell-\mathbf b_j^\ell)}
+ {\max(\mathbf d_j^\ell/2,\epsilon)}.
+\end{equation}
+Division and the maximum are componentwise. The coordinates are clipped to $[-8,8]$. An eight-dimensional descriptor concatenates relative position, outside-box excess, normalized log-depth, and confidence:
+\begin{equation}
+ \mathbf g=\left[\mathbf r,\ (|\mathbf r|-1)_+,\
+ \frac{\log\max(D,\epsilon)}{\log100},\ C\right].
+\end{equation}
+A learned $8\!\rightarrow\!32\!\rightarrow\!256$ map $\phi$ contributes a residual to the sampled image feature:
+\begin{equation}
+ \widetilde{\mathbf f}_{j,k}^\ell=
+ \mathbf f_{j,k}^\ell+m_{j,k}^\ell\phi(\mathbf g_{j,k}^\ell),
+\end{equation}
+where $m$ denotes valid image/depth evidence. Cross-attention aggregates these enriched samples to update each query, followed by box refinement. Horizontal center updates are bounded by 3 m per layer, and vertical updates by 2 m in the configuration.
+
+The mechanism is dynamic in both sampling location and interpretation: updating a box modifies where image features are sampled and how observed surfaces relate to the hypothesis. While raw scalar depth lacks spatial awareness relative to oriented boxes, our box-relative descriptor encodes this spatial relationship explicitly within the query attention, directly coupling multi-view geometry to detection.
+
+\subsection{Inter-Vehicle Pose Consensus and Box Aggregation}
+Camera predictions are converted to local vehicle-frame estimates using the known rig transforms. Four-camera estimates are combined using averaged translations and sign-aligned quaternion fusion. Re-referencing to the selected ego vehicle gives $\hat T_{e\leftarrow v}$ for transforming local boxes. Oriented bird's-eye-view non-maximum suppression removes duplicate detections after transformation.
+
+\textit{Remark on metric scale:} When physical metric deployment is required, the global scale factor can be anchored using known intra-vehicle camera baseline triangulation as an optional visual post-processing step. Valid triangulated camera-axis depths from overlapping onboard cameras are compared with predicted depths, yielding an image-based scale multiplier without requiring external positioning sensors.
+
+\subsection{Training}
+The reported joint model starts from an adapted dynamic-query detector and undergoes four epochs of joint training on the official OPV2V training split. The registered detector initialization follows an eight-epoch head adaptation stage. No validation or test frames are used for gradient updates. Camera pose and measured depth targets are used as training supervision only; inference consumes the multi-view camera streams and the known intra-vehicle calibration. The joint objective combines detection, camera pose, measured vehicle depth, measured background depth, and preservation of reliable teacher depth:
+\begin{align}
+\label{eq:joint_loss}
+\mathcal{L} ={}& \mathcal{L}_{\mathrm{det}} + \lambda_{\mathrm{pose}}\mathcal{L}_{\mathrm{pose}} + \lambda_{\mathrm{veh}}\mathcal{L}_{\mathrm{veh\text{-}depth}} \nonumber\\
+&+ \lambda_{\mathrm{bg}}\mathcal{L}_{\mathrm{bg\text{-}depth}} + \lambda_{\mathrm{pres}}\mathcal{L}_{\mathrm{preserve}},
+\end{align}
+where $\lambda_{\mathrm{pose}}$, $\lambda_{\mathrm{veh}}$, $\lambda_{\mathrm{bg}}$, and $\lambda_{\mathrm{pres}}$ denote loss-balancing hyperparameters, empirically set to $1.0$, $0.1$, $0.02$, and $0.1$, respectively. Detection uses one-to-one target assignment, center, dimension, yaw, and objectness terms, with intermediate-layer supervision. Their configured weights are 2, 1, 0.5, and 1, and the auxiliary weight is 0.5. Depth preservation uses a frozen teacher only at eligible, confident, spatially stable locations outside projected vehicle exclusion regions. Detection gradients entering depth are scaled by 0.1; confidence is detached during geometric query refinement. The entire network is trained end-to-end with multi-task geometric supervision; the phrase \emph{camera-only} below refers to inference, not to the absence of geometric supervision during training.
+
+We use AdamW with weight decay 0.01 and gradient clipping at 5. Learning rates for the backbone, existing detector, grouping, and depth-evidence modules are $10^{-6}$, $10^{-5}$, $3\cdot10^{-5}$, and $3\cdot10^{-5}$. The joint stage uses eight accelerators. The four-epoch jointly trained checkpoint serves as our primary model, from which query adaptations inherit pre-trained parameters.

@@ -1,0 +1,33 @@
+% ==============================================================================
+% revision_macros.tex
+% VisionCoop Revision & Annotation Macros
+% ==============================================================================
+\usepackage{xcolor}
+\usepackage[normalem]{ulem} % Provides robust strikethrough \sout
+
+% Provide \ifshowedits toggle if not already defined
+\ifdefined\showedits
+\else
+  \newif\ifshowedits
+  \showeditstrue % Default: show edits and annotations
+\fi
+
+\ifshowedits
+  % Visual color palette for reviews
+  \definecolor{revadd}{rgb}{0.0, 0.35, 0.75}    % Blue for additions
+  \definecolor{revdel}{rgb}{0.75, 0.05, 0.05}   % Red for deletions
+  \definecolor{revnote}{rgb}{0.96, 0.92, 0.65}  % Light yellow for comment boxes
+  \definecolor{notetext}{rgb}{0.35, 0.25, 0.0}  % Dark gold for comment text
+
+  % Revision commands
+  \newcommand{\add}[1]{{\color{revadd}#1}}
+  \newcommand{\del}[1]{{\color{revdel}\sout{#1}}}
+  \newcommand{\note}[1]{\colorbox{revnote}{\textcolor{notetext}{\footnotesize\bfseries[批注: #1]}}}
+  \newcommand{\change}[3]{{\color{revdel}\sout{#1}}\,{\color{revadd}#2}\,\colorbox{revnote}{\textcolor{notetext}{\footnotesize\bfseries[#3]}}}
+\else
+  % Clean mode for publication
+  \newcommand{\add}[1]{#1}
+  \newcommand{\del}[1]{}
+  \newcommand{\note}[1]{}
+  \newcommand{\change}[3]{#2}
+\fi
